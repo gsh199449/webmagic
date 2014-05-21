@@ -2,6 +2,7 @@ package us.codecraft.webmagic.downloader;
 
 import com.google.common.collect.Sets;
 import org.apache.commons.io.IOUtils;
+import org.apache.commons.lang.StringUtils;
 import org.apache.http.HttpResponse;
 import org.apache.http.NameValuePair;
 import org.apache.http.annotation.ThreadSafe;
@@ -12,14 +13,18 @@ import org.apache.http.client.methods.HttpUriRequest;
 import org.apache.http.client.methods.RequestBuilder;
 import org.apache.http.impl.client.CloseableHttpClient;
 import org.apache.http.util.EntityUtils;
+import org.jsoup.Jsoup;
+import org.jsoup.nodes.Document;
+import org.jsoup.nodes.Element;
+import org.jsoup.select.Elements;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import us.codecraft.webmagic.Page;
 import us.codecraft.webmagic.Request;
 import us.codecraft.webmagic.Site;
 import us.codecraft.webmagic.Task;
-import us.codecraft.webmagic.utils.HttpConstant;
 import us.codecraft.webmagic.selector.PlainText;
+import us.codecraft.webmagic.utils.HttpConstant;
 import us.codecraft.webmagic.utils.UrlUtils;
 
 import java.io.IOException;
@@ -86,8 +91,8 @@ public class HttpClientDownloader extends AbstractDownloader {
             if (statusAccept(acceptStatCode, statusCode)) {
                 //charset
                 if (charset == null) {
-                    String value = httpResponse.getEntity().getContentType().getValue();
-                    charset = UrlUtils.getCharset(value);
+                    charset = getHtmlCharset(httpResponse);
+                    logger.debug("Auto get charset: " + charset);
                 }
                 Page page = handleResponse(request, charset, httpResponse, task);
                 onSuccess(request);
@@ -113,6 +118,38 @@ public class HttpClientDownloader extends AbstractDownloader {
                 logger.warn("close response fail", e);
             }
         }
+    }
+
+    protected String getHtmlCharset(CloseableHttpResponse httpResponse) throws IOException {
+        // 1、encoding in http header Content-Type
+        String value = httpResponse.getEntity().getContentType().getValue();
+        String charset = UrlUtils.getCharset(value);
+
+        if (StringUtils.isEmpty(charset)) {
+            // 2、charset in meta
+            String content = IOUtils.toString(httpResponse.getEntity().getContent());
+            if (StringUtils.isNotEmpty(content)) {
+                Document document = Jsoup.parse(content);
+                Elements links = document.select("meta");
+                for (Element link : links) {
+                    // 2.1、 <meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
+                    String metaContent = link.attr("content");
+                    String metaCharset = link.attr("charset");
+                    if (metaContent.indexOf("charset") != -1) {
+                        metaContent = metaContent.substring(metaContent.indexOf("charset"), metaContent.length());
+                        charset = metaContent.split("=")[1];
+                        break;
+                    }
+                    // 2.2、 <meta charset="UTF-8" />
+                    else if (StringUtils.isNotEmpty(metaCharset)) {
+                        charset = metaCharset;
+                        break;
+                    }
+                }
+                // 3、todo use tools as cpdetector for content decode
+            }
+        }
+        return charset;
     }
 
     @Override
